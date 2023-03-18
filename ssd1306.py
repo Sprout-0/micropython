@@ -2,7 +2,7 @@
 
 import time
 import framebuf
-import font
+import font  #font.py 自己创建
 
 # register definitions
 SET_CONTRAST        = const(0x81)
