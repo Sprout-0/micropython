@@ -1,11 +1,11 @@
-import time
+import time,utime
 from machine import Pin,UART
-
+import ustruct
 # 初始化LED灯
 led_pin = Pin(25, Pin.OUT)
 led_pin.value(0) 
 # 初始化串口
-uart1 =UART(1,baudrate = 115200,bits = 8,parity = None,stop = 1 ,tx = Pin(4),rx = Pin(5))  #无线串口传输数据
+uart1 =UART(1,baudrate = 115200,bits = 8,parity = None,stop = 1 ,tx = Pin(4),rx = Pin(5))  
 uart2 =UART(0,baudrate = 115200,bits = 8,parity = None,stop = 1 ,tx = Pin(12),rx = Pin(13))
 
 def ABS(x):
@@ -28,55 +28,42 @@ class SysParams:
     S_ORG = 16     # 读取正在回零/回零失败状态标志位
 
 
-def Emm_V5_Read_Sys_Params(addr, s): #调用函数读取系统参数
+def Emm_V5_Read_Sys_Params(addr, s):
+    i = 0
     cmd = bytearray(16)
 
     # 装载命令
-    i = 0
     cmd[i] = addr
     i += 1
 
     # 功能码
-    if s == "S_VER":
-        cmd[i] = 0x1F
-    elif s == "S_RL":
-        cmd[i] = 0x20
-    elif s == "S_PID":
-        cmd[i] = 0x21
-    elif s == "S_VBUS":
-        cmd[i] = 0x24
-    elif s == "S_CPHA":
-        cmd[i] = 0x27
-    elif s == "S_ENCL":
-        cmd[i] = 0x31
-    elif s == "S_TPOS":
-        cmd[i] = 0x33
-    elif s == "S_VEL":
-        cmd[i] = 0x35
-    elif s == "S_CPOS":
-        cmd[i] = 0x36
-    elif s == "S_PERR":
-        cmd[i] = 0x37
-    elif s == "S_FLAG":
-        cmd[i] = 0x3A
-    elif s == "S_ORG":
-        cmd[i] = 0x3B
-    elif s == "S_Conf":
-        cmd[i] = 0x42
-        i += 1
-        cmd[i] = 0x6C
-    elif s == "S_State":
-        cmd[i] = 0x43
-        i += 1
-        cmd[i] = 0x7A
+    func_codes = {
+        'S_VER': 0x1F,
+        'S_RL': 0x20,
+        'S_PID': 0x21,
+        'S_VBUS': 0x24,
+        'S_CPHA': 0x27,
+        'S_ENCL': 0x31,
+        'S_TPOS': 0x33,
+        'S_VEL': 0x35,
+        'S_CPOS': 0x36,
+        'S_PERR': 0x37,
+        'S_FLAG': 0x3A,
+        'S_ORG': 0x3B,
+        'S_Conf': 0x42,
+        'S_State': 0x43
+    }
 
+    if s in func_codes:
+        cmd[i] = func_codes[s]
+        i += 1
+
+    cmd[i] = 0x6B
     i += 1
-    cmd[i] = 0x6B  # 校验字节
 
     # 发送命令
-    uart1.write(cmd[:i+1])
-    uart2.write(cmd[:i+1])
-
+    uart1.write(cmd[:i])
+    uart2.write(cmd[:i])
     
 def Emm_V5_Reset_CurPos_To_Zero(addr): #将当前位置清零
     cmd = bytearray(4)
@@ -281,32 +268,70 @@ def Emm_V5_Origin_Interrupt(addr): #为地址为0x01的电机发送强制中断�
     uart1.write(cmd)
     uart2.write(cmd)
 
-'''
-def Emm_V5_Receive_Data(): #接收数据
-    rxCmd = bytearray()       # 初始化接收数据的数组
-    MAX_LENGTH = 128          # 定义最大接收长度，以防止数组溢出
-    TIMEOUT = 100             # 设置超时时间（毫秒）
-    start_time = time.ticks_ms()  # 记录当前时间
+def Emm_V5_Receive_Data(uart):
+    i = 0
+    rxCmd = bytearray(128)
+    lTime = cTime = utime.ticks_ms()
 
-    # 开始接收数据
     while True:
-        if uart1.any() > 0:    # 检查串口中是否有数据
-            new_byte = uart1.read(1)  # 读取1字节数据
-            if len(rxCmd) < MAX_LENGTH:
-                rxCmd.extend(new_byte)  # 将接收到的数据追加到数组
-                start_time = time.ticks_ms()  # 更新最后接收到数据的时间
-            
-        elif uart2.any() > 0:    # 检查串口中是否有数据
-            new_byte = uart2.read(1)  # 读取1字节数据
-            if len(rxCmd) < MAX_LENGTH:
-                rxCmd.extend(new_byte)  # 将接收到的数据追加到数组
-                start_time = time.ticks_ms()  # 更新最后接收到数据的时间
-        else:
-            # 检查是否超时
-            if time.ticks_diff(time.ticks_ms(), start_time) > TIMEOUT:
-                break  # 如果超时，则结束数据接收
+        if uart.any():  # 串口有数据进来
+            if i < 128:  # 防止数组溢出，该值需要小于数组的长度
+                rxCmd[i] = uart.read(1)[0]  # 接收数据
+                i += 1
+                lTime = utime.ticks_ms()  # 更新上一时刻的时间
+        else:  # 串口没有数据
+            cTime = utime.ticks_ms()  # 获取当前时刻的时间
+            if utime.ticks_diff(cTime, lTime) > 100:  # 100毫秒内串口没有数据进来，就判定一帧数据接收结束
+                #hex_data = ' '.join(['{:02x}'.format(b) for b in rxCmd[:i] if b != 0])  # 转换为16进制并保留字符前的数字0，去掉0，添加空格
+                
+                #hex_data = ' '.join(['{:02x}'.format(b) for b in rxCmd[:i]])  # 转换为16进制并保留字符前的数字0，添加空格
+                #hex_data = hex_data.strip('00 ')  # 去掉16进制字符串前后的无效0
+                
+                hex_data = ' '.join(['{:02x}'.format(b) for b in rxCmd[:i]])  # 转换为16进制并保留字符前的数字0，添加空格
+                hex_data = hex_data.strip('00 ')  # 去掉16进制字符串前后的无效0
+                if hex_data and hex_data[0] != '0':  # 如果首字符不是0，则在首字符前添加一个0
+                    hex_data = '0' + hex_data
+                return hex_data, len(hex_data.replace(' ', ''))//2  # 返回数据和数据长度
 
-    rxCount = len(rxCmd)  # 接收到的数据长度
-    return rxCmd, rxCount  # 返回接收到的数据和数据长度
-'''
+def Real_time_location():
+    # 定义实时位置变量
+    pos1 = 0.0
+    pos2 = 0.0
+    Motor_Cur_Pos1 = 0.0
+    Motor_Cur_Pos2 = 0.0
+    
+    # 读取电机实时位置
+    Emm_V5_Read_Sys_Params(1, 'S_CPOS')
+    time.sleep_ms(1)
+    Emm_V5_Read_Sys_Params(2, 'S_CPOS')
 
+    # 等待返回命令，命令数据缓存在数组data上，长度为count
+    data1, count1 = Emm_V5_Receive_Data(uart1)
+    data2, count2 = Emm_V5_Receive_Data(uart2)
+    #print("UART1 Data: ", data1, " Count: ", count1)
+    #print("UART2 Data: ", data2, " Count: ", count2)
+    data1_hex = data1.split()
+    data2_hex = data2.split()
+
+    if count1 > 0 and count2 > 0 and data1 and data2 and int(data1_hex[0], 16) == 0x01 and int(data1_hex[1], 16) == 0x36 and int(data2_hex[0], 16) == 0x02 and int(data2_hex[1], 16) == 0x36 :
+        # 拼接成uint32_t类型
+        pos1 = ustruct.unpack('>I', bytes.fromhex(''.join(data1_hex[3:7])))[0]
+        pos2 = ustruct.unpack('>I', bytes.fromhex(''.join(data2_hex[3:7])))[0]
+
+        # 转换成角度
+        Motor_Cur_Pos1 = float(pos1) * 360.0 / 65536.0
+        Motor_Cur_Pos2 = float(pos2) * 360.0 / 65536.0
+
+        # 符号
+        if int(data1_hex[2], 16):
+            Motor_Cur_Pos1 = -Motor_Cur_Pos1
+        if int(data2_hex[2], 16):
+            Motor_Cur_Pos2 = -Motor_Cur_Pos2
+    else:
+        pass
+        
+    # 调试使用，打印Emm_V5.0闭环返回的实时角度到串口
+    print('Motor1: {:.1f}, Motor2: {:.1f}'.format(Motor_Cur_Pos1, Motor_Cur_Pos2))  # 将浮点数转换为字符串，再打印到串口，设置转换结果为4位数，其中1位小数
+    
+    time.sleep_ms(1)
+    
